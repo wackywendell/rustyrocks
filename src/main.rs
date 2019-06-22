@@ -1,11 +1,95 @@
 use std::io;
 use std::io::prelude::*;
 
+use serde::{Deserialize, Serialize, Serializer};
+
 use itertools::kmerge;
 use itertools::Itertools;
 use rmp::decode::read_str_from_slice;
 use rmp::encode::write_str;
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
+
+pub trait Value<'de>: Deserialize<'de> + Serialize {
+    fn merge(&mut self, other: &Self);
+}
+
+pub trait Key<'de>: Deserialize<'de> + Serialize {}
+
+trait SerGen: Sized {
+    type Ok;
+    type Error: serde::ser::Error;
+    type SerializeSeq: serde::ser::SerializeSeq<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTuple: serde::ser::SerializeTuple<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTupleStruct: serde::ser::SerializeTupleStruct<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeTupleVariant: serde::ser::SerializeTupleVariant<
+        Ok = Self::Ok,
+        Error = Self::Error,
+    >;
+    type SerializeMap: serde::ser::SerializeMap<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeStruct: serde::ser::SerializeStruct<Ok = Self::Ok, Error = Self::Error>;
+    type SerializeStructVariant: serde::ser::SerializeStructVariant<
+        Ok = Self::Ok,
+        Error = Self::Error,
+    >;
+    type Serializer: Serializer<
+        Ok = Self::Ok,
+        Error = Self::Error,
+        SerializeSeq = Self::SerializeSeq,
+        SerializeTuple = Self::SerializeTuple,
+        SerializeTupleStruct = Self::SerializeTupleStruct,
+        SerializeTupleVariant = Self::SerializeTupleVariant,
+        SerializeMap = Self::SerializeMap,
+        SerializeStruct = Self::SerializeStruct,
+        SerializeStructVariant = Self::SerializeStructVariant,
+    >;
+    fn new() -> Self::Serializer;
+}
+
+trait SerdeBytes {
+    type SerErr: serde::ser::Error;
+    type DeErr: serde::de::Error;
+    fn serialize<T: Serialize>(value: T) -> Result<Vec<u8>, Self::SerErr>;
+    fn deserialize<'de, T: Deserialize<'de>>(slice: &'de [u8]) -> Result<T, Self::DeErr>;
+}
+
+pub trait ByteSer {
+    type Error: serde::ser::Error + Sync + Send + 'static;
+    fn serialize(&self) -> Result<Vec<u8>, Self::Error>;
+}
+
+pub trait ByteDe: Sized {
+    type Error: serde::de::Error + Sync + Send + 'static;
+    fn deserialize<'de>(slice: &'de [u8]) -> Result<Self, Self::Error>;
+}
+
+pub struct TypedDatabase {
+    db: DB,
+}
+
+impl TypedDatabase {
+
+    
+    pub fn new(db: DB) -> Self {
+        TypedDatabase { db: db }
+    }
+
+    pub fn put<S: ByteSer>(&self, k: S, v: S) -> Result<(), failure::Error> {
+        let kb = k.serialize()?;
+        let vb = v.serialize()?;
+        self.db.put(kb, vb)?;
+        Ok(())
+    }
+
+    pub fn get<S: ByteSer, D: ByteDe>(&self, k: S) -> Result<Option<D>, failure::Error> {
+        let kb = k.serialize()?;
+        let vb_opt = self.db.get(kb)?;
+        let vb = match vb_opt {
+            None => return Ok(None),
+            Some(vb) => vb,
+        };
+        return Ok(Some(D::deserialize(vb.as_ref())?));
+    }
+}
 
 fn concat_merge(
     _new_key: &[u8],
