@@ -6,3 +6,5 @@ edition = "2018"
 
 [dependencies]
 rocksdb = "0.12.2"
+rmp = "0.8.7"
+itertools = "0.8.0"
