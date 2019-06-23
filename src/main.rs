@@ -1,95 +1,136 @@
 use std::io;
 use std::io::prelude::*;
 
-use serde::{Deserialize, Serialize, Serializer};
-
 use itertools::kmerge;
 use itertools::Itertools;
 use rmp::decode::read_str_from_slice;
 use rmp::encode::write_str;
+
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
-
-pub trait Value<'de>: Deserialize<'de> + Serialize {
-    fn merge(&mut self, other: &Self);
+use serde::{Deserialize, Serialize};
+pub struct PinnedItem<'de, V: ?Sized + Deserialize<'de>> {
+    phantom: std::marker::PhantomData<V>,
+    pinned_slice: rocksdb::DBPinnableSlice<'de>,
 }
 
-pub trait Key<'de>: Deserialize<'de> + Serialize {}
-
-trait SerGen: Sized {
-    type Ok;
-    type Error: serde::ser::Error;
-    type SerializeSeq: serde::ser::SerializeSeq<Ok = Self::Ok, Error = Self::Error>;
-    type SerializeTuple: serde::ser::SerializeTuple<Ok = Self::Ok, Error = Self::Error>;
-    type SerializeTupleStruct: serde::ser::SerializeTupleStruct<Ok = Self::Ok, Error = Self::Error>;
-    type SerializeTupleVariant: serde::ser::SerializeTupleVariant<
-        Ok = Self::Ok,
-        Error = Self::Error,
-    >;
-    type SerializeMap: serde::ser::SerializeMap<Ok = Self::Ok, Error = Self::Error>;
-    type SerializeStruct: serde::ser::SerializeStruct<Ok = Self::Ok, Error = Self::Error>;
-    type SerializeStructVariant: serde::ser::SerializeStructVariant<
-        Ok = Self::Ok,
-        Error = Self::Error,
-    >;
-    type Serializer: Serializer<
-        Ok = Self::Ok,
-        Error = Self::Error,
-        SerializeSeq = Self::SerializeSeq,
-        SerializeTuple = Self::SerializeTuple,
-        SerializeTupleStruct = Self::SerializeTupleStruct,
-        SerializeTupleVariant = Self::SerializeTupleVariant,
-        SerializeMap = Self::SerializeMap,
-        SerializeStruct = Self::SerializeStruct,
-        SerializeStructVariant = Self::SerializeStructVariant,
-    >;
-    fn new() -> Self::Serializer;
+impl<'de, V: ?Sized + Deserialize<'de>> PinnedItem<'de, V> {
+    pub fn into(&'de self) -> Result<V, failure::Error> {
+        Ok(bincode::deserialize(self.pinned_slice.as_ref())?)
+    }
 }
 
-trait SerdeBytes {
-    type SerErr: serde::ser::Error;
-    type DeErr: serde::de::Error;
-    fn serialize<T: Serialize>(value: T) -> Result<Vec<u8>, Self::SerErr>;
-    fn deserialize<'de, T: Deserialize<'de>>(slice: &'de [u8]) -> Result<T, Self::DeErr>;
-}
-
-pub trait ByteSer {
-    type Error: serde::ser::Error + Sync + Send + 'static;
-    fn serialize(&self) -> Result<Vec<u8>, Self::Error>;
-}
-
-pub trait ByteDe: Sized {
-    type Error: serde::de::Error + Sync + Send + 'static;
-    fn deserialize<'de>(slice: &'de [u8]) -> Result<Self, Self::Error>;
-}
-
-pub struct TypedDatabase {
+pub struct TypedDB<K: ?Sized, V: ?Sized> {
+    phantom_key: std::marker::PhantomData<K>,
+    phantom_value: std::marker::PhantomData<V>,
     db: DB,
 }
 
-impl TypedDatabase {
-
-    
+impl<K: Serialize + ?Sized, V: Serialize + ?Sized> TypedDB<K, V> {
     pub fn new(db: DB) -> Self {
-        TypedDatabase { db: db }
+        TypedDB {
+            phantom_key: std::marker::PhantomData,
+            phantom_value: std::marker::PhantomData,
+            db: db,
+        }
     }
 
-    pub fn put<S: ByteSer>(&self, k: S, v: S) -> Result<(), failure::Error> {
-        let kb = k.serialize()?;
-        let vb = v.serialize()?;
+    pub fn put(&self, k: &K, v: &V) -> Result<(), failure::Error> {
+        let kb = bincode::serialize(k)?;
+        let vb = bincode::serialize(v)?;
+
         self.db.put(kb, vb)?;
         Ok(())
     }
+}
 
-    pub fn get<S: ByteSer, D: ByteDe>(&self, k: S) -> Result<Option<D>, failure::Error> {
-        let kb = k.serialize()?;
-        let vb_opt = self.db.get(kb)?;
-        let vb = match vb_opt {
+impl<'a, K: Serialize + ?Sized, V: Deserialize<'a> + ?Sized> TypedDB<K, V> {
+    pub fn get(&'a self, k: &'a K) -> Result<Option<PinnedItem<'a, V>>, failure::Error> {
+        let kb = bincode::serialize(k)?;
+        let vb_opt: Option<rocksdb::DBPinnableSlice<'a>> = self.db.get_pinned(kb)?;
+        let vb: rocksdb::DBPinnableSlice<'a> = match vb_opt {
             None => return Ok(None),
             Some(vb) => vb,
         };
-        return Ok(Some(D::deserialize(vb.as_ref())?));
+
+        let pinned_item = PinnedItem {
+            phantom: std::marker::PhantomData,
+            pinned_slice: vb,
+        };
+
+        return Ok(Some(pinned_item));
     }
 }
+
+pub trait AssociateMergeable: Sized {
+    type Error: std::fmt::Display;
+    fn merge(&mut self, other: &Self) -> Self;
+    fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error>;
+}
+
+fn unwrap_or_log<V, E: std::fmt::Display>(r: Result<V, E>) -> Option<V> {
+    match r {
+        Ok(v) => Some(v),
+        Err(e) => {
+            println!("Error! {}", e);
+            None
+        }
+    }
+}
+
+fn merge<V: Serialize + AssociateMergeable>(
+    _new_key: &[u8],
+    existing_val: Option<&[u8]>,
+    operands: &mut MergeOperands,
+) -> Option<Vec<u8>> {
+    let mut merged: Option<V> =
+        existing_val.and_then(|unparsed| unwrap_or_log(V::deserialize(unparsed)));
+
+    for unparsed in operands {
+        let deser: Option<V> = unwrap_or_log(V::deserialize(unparsed));
+
+        merged = match (merged, deser) {
+            (None, None) => None,
+            (Some(m), None) => Some(m),
+            (None, Some(d)) => Some(d),
+            (Some(ref mut m), Some(ref d)) => Some(m.merge(d)),
+        };
+    }
+
+    merged.and_then(|value| unwrap_or_log(bincode::serialize(&value)))
+}
+
+pub struct MergeableDB<K: ?Sized, V: ?Sized> {
+    typed_db: TypedDB<K, V>,
+}
+
+impl<'a, K: Serialize + ?Sized, V: Deserialize<'a> + ?Sized> MergeableDB<K, V> {
+    pub fn get(&'a self, k: &'a K) -> Result<Option<PinnedItem<'a, V>>, failure::Error> {
+        self.typed_db.get(k)
+    }
+}
+
+impl<K: Serialize + ?Sized, V: Serialize + ?Sized> MergeableDB<K, V> {
+    pub fn put(&self, k: &K, v: &V) -> Result<(), failure::Error> {
+        self.typed_db.put(k, v)
+    }
+}
+
+impl<'a, K: Serialize + ?Sized, V: Serialize + Deserialize<'a> + AssociateMergeable + ?Sized>
+    MergeableDB<K, V>
+{
+    pub fn new<P: AsRef<std::path::Path>>(path: P) -> Result<Self, failure::Error> {
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+
+        opts.set_merge_operator("test operator", merge::<V>, None);
+        let db = DB::open(&opts, path)?;
+
+        Ok(MergeableDB {
+            typed_db: TypedDB::new(db),
+        })
+    }
+}
+
 
 fn concat_merge(
     _new_key: &[u8],
