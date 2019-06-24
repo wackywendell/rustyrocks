@@ -1,15 +1,11 @@
-use std::io;
+use std::collections::BTreeSet;
 use std::io::prelude::*;
-
-use itertools::kmerge;
-use itertools::Itertools;
-use rmp::decode::read_str_from_slice;
-use rmp::encode::write_str;
+use std::marker::{PhantomData, Send};
 
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
 use serde::{Deserialize, Serialize};
 pub struct PinnedItem<'de, V: ?Sized + Deserialize<'de>> {
-    phantom: std::marker::PhantomData<V>,
+    phantom: PhantomData<V>,
     pinned_slice: rocksdb::DBPinnableSlice<'de>,
 }
 
@@ -20,16 +16,16 @@ impl<'de, V: ?Sized + Deserialize<'de>> PinnedItem<'de, V> {
 }
 
 pub struct TypedDB<K: ?Sized, V: ?Sized> {
-    phantom_key: std::marker::PhantomData<K>,
-    phantom_value: std::marker::PhantomData<V>,
+    phantom_key: PhantomData<K>,
+    phantom_value: PhantomData<V>,
     db: DB,
 }
 
 impl<K: Serialize + ?Sized, V: Serialize + ?Sized> TypedDB<K, V> {
     pub fn new(db: DB) -> Self {
         TypedDB {
-            phantom_key: std::marker::PhantomData,
-            phantom_value: std::marker::PhantomData,
+            phantom_key: PhantomData,
+            phantom_value: PhantomData,
             db: db,
         }
     }
@@ -53,7 +49,7 @@ impl<'a, K: Serialize + ?Sized, V: Deserialize<'a> + ?Sized> TypedDB<K, V> {
         };
 
         let pinned_item = PinnedItem {
-            phantom: std::marker::PhantomData,
+            phantom: PhantomData,
             pinned_slice: vb,
         };
 
@@ -61,10 +57,58 @@ impl<'a, K: Serialize + ?Sized, V: Deserialize<'a> + ?Sized> TypedDB<K, V> {
     }
 }
 
-pub trait AssociateMergeable: Sized {
-    type Error: std::fmt::Display;
-    fn merge(&mut self, other: &Self) -> Self;
+struct DBIter<'a, K, V> {
+    phantom_key: PhantomData<K>,
+    phantom_value: PhantomData<V>,
+    inner: rocksdb::DBIterator<'a>,
+}
+
+impl<'a, K: StaticDeserialize, V: StaticDeserialize> Iterator for DBIter<'a, K, V>
+where
+    <K as StaticDeserialize>::Error: Send + Sync + 'static,
+    <V as StaticDeserialize>::Error: Send + Sync + 'static,
+{
+    type Item = Result<(K, V), failure::Error>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        let (kb, vb) = self.inner.next()?;
+
+        let kd = K::deserialize(kb.as_ref());
+        let k = match kd {
+            Ok(k) => k,
+            Err(e) => return Some(Err(e.into())),
+        };
+
+        let vd = V::deserialize(vb.as_ref());
+        let v = match vd {
+            Ok(v) => v,
+            Err(e) => return Some(Err(e.into())),
+        };
+
+        Some(Ok((k, v)))
+    }
+}
+
+impl<'a, K: Deserialize<'a>, V: Deserialize<'a>> TypedDB<K, V> {
+    // type Item=Result<(K, V), failure::Error>;
+    // type IntoIter=DBIter<'a, K, V>;
+
+    fn into_iter(&'a self) -> DBIter<'a, K, V> {
+        return DBIter {
+            phantom_key: PhantomData,
+            phantom_value: PhantomData,
+            inner: self.db.iterator(IteratorMode::Start),
+        };
+    }
+}
+
+pub trait StaticDeserialize: Sized {
+    type Error: std::error::Error;
     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error>;
+}
+
+pub trait AssociateMergeable: Sized + StaticDeserialize {
+    fn merge(&mut self, other: &mut Self);
 }
 
 fn unwrap_or_log<V, E: std::fmt::Display>(r: Result<V, E>) -> Option<V> {
@@ -92,7 +136,10 @@ fn merge<V: Serialize + AssociateMergeable>(
             (None, None) => None,
             (Some(m), None) => Some(m),
             (None, Some(d)) => Some(d),
-            (Some(ref mut m), Some(ref d)) => Some(m.merge(d)),
+            (Some(mut m), Some(mut d)) => {
+                m.merge(&mut d);
+                Some(m)
+            }
         };
     }
 
@@ -129,82 +176,56 @@ impl<'a, K: Serialize + ?Sized, V: Serialize + Deserialize<'a> + AssociateMergea
             typed_db: TypedDB::new(db),
         })
     }
+
+    pub fn merge(&self, k: &K, v: &V) -> Result<(), failure::Error> {
+        let kb = bincode::serialize(k)?;
+        let vb = bincode::serialize(v)?;
+
+        self.typed_db.db.merge(kb, vb)?;
+        Ok(())
+    }
 }
 
-
-fn concat_merge(
-    _new_key: &[u8],
-    existing_val: Option<&[u8]>,
-    operands: &mut MergeOperands,
-) -> Option<Vec<u8>> {
-    let mut result: Vec<u8> = Vec::with_capacity(operands.size_hint().0);
-
-    let mut existing: Vec<&str> = vec![];
-    existing_val.map(|mut unparsed| {
-        while let Ok((chunk, tail)) = read_str_from_slice(unparsed) {
-            existing.push(chunk);
-            unparsed = tail;
-        }
-    });
-
-    let mut merged_inputs: Vec<&str> = vec![];
-    for mut unparsed in operands {
-        while let Ok((chunk, tail)) = read_str_from_slice(unparsed) {
-            merged_inputs.push(chunk);
-            unparsed = tail;
-        }
+impl StaticDeserialize for BTreeSet<String> {
+    type Error = bincode::Error;
+    fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
+        return bincode::deserialize(bytes);
     }
-
-    merged_inputs.sort();
-    for s in kmerge(vec![existing, merged_inputs]).dedup() {
-        match write_str(&mut result, s) {
-            Ok(()) => {}
-            Err(e) => println!("Ignoring err {}", e),
-        }
-    }
-
-    Some(result)
 }
 
-fn serialize_single(s: &str) -> Vec<u8> {
-    let mut r: Vec<u8> = Vec::with_capacity(s.len());
-    if let Err(e) = write_str(&mut r, s) {
-        println!("Ignoring merge err: {}", e);
+impl StaticDeserialize for String {
+    type Error = bincode::Error;
+    fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
+        return bincode::deserialize(bytes);
     }
-    return r;
 }
 
-fn deserialize(s: &[u8]) -> Vec<&str> {
-    let mut result: Vec<&str> = vec![];
-    let mut unparsed = s;
-    while let Ok((chunk, tail)) = read_str_from_slice(unparsed) {
-        result.push(chunk);
-        unparsed = tail;
+impl AssociateMergeable for BTreeSet<String> {
+    fn merge(&mut self, other: &mut Self) {
+        self.append(other)
     }
-    return result;
 }
 
-fn main() {
+fn main() -> Result<(), failure::Error> {
     let path = "words.db";
 
-    let mut opts = Options::default();
-    opts.create_if_missing(true);
-    opts.set_merge_operator("test operator", concat_merge, None);
-    let db = DB::open(&opts, path).unwrap();
-
     // NB: db is automatically closed at end of lifetime
-    let stdin = io::stdin();
+    let db: MergeableDB<String, BTreeSet<String>> = MergeableDB::new(path)?;
+
+    let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
         let splits: Vec<_> = line.trim().splitn(2, " ").collect();
-        if splits.len() < 2 {
+        if splits.len() != 2 {
             println!("Could not split '{}'", line);
             continue;
         }
         let word = splits[0];
         let value = splits[1];
+        let mut new_set = BTreeSet::new();
+        new_set.insert(value.to_string());
         // db.put(word, value).unwrap();
-        if let Err(e) = db.merge(word, serialize_single(value)) {
+        if let Err(e) = db.merge(&word.to_string(), &new_set) {
             println!("Ignoring merge err: {}", e);
         }
 
@@ -228,14 +249,15 @@ fn main() {
         // }
     }
 
-    let iter = db.iterator(IteratorMode::Start); // Always iterates forward
-    for (key, value) in iter {
-        let k = std::str::from_utf8(key.as_ref()).unwrap();
+    let iter = db.typed_db.into_iter(); // Always iterates forward
+    for kv in iter {
+        let (k, v) = kv?;
         print!("{}:", k);
-        let results = deserialize(value.as_ref());
-        for r in results {
+        for r in v {
             print!(" {}", r);
         }
         print!("\n");
     }
+
+    Ok(())
 }
