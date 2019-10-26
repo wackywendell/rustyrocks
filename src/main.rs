@@ -4,7 +4,10 @@ use std::marker::{PhantomData, Send};
 
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
 use serde::{Deserialize, Serialize};
-pub struct PinnedItem<'de, V: ?Sized + Deserialize<'de>> {
+
+use zerocopy::{AsBytes,FromBytes};
+
+pub struct PinnedItem<'de, V: FromBytes> {
     phantom: PhantomData<V>,
     pinned_slice: rocksdb::DBPinnableSlice<'de>,
 }
@@ -110,6 +113,7 @@ pub trait StaticDeserialize: Sized {
 pub trait AssociateMergeable: Sized + StaticDeserialize {
     fn merge(&mut self, other: &mut Self);
 }
+
 
 fn unwrap_or_log<V, E: std::fmt::Display>(r: Result<V, E>) -> Option<V> {
     match r {

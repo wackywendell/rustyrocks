@@ -9,3 +9,4 @@ rocksdb = "0.12.2"
 serde = "1.0.92" # Probably not needed anymore?
 bincode = "1.1.4"
 failure = "0.1.5"
+zerocopy = "0.2.6"
