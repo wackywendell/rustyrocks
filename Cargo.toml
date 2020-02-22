@@ -5,7 +5,7 @@ authors = ["Wendell Smith <wackywendell@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-rocksdb = "0.12.2"
+rocksdb = "0.13.0"
 serde = "1.0.92" # Probably not needed anymore?
 bincode = "1.1.4"
 failure = "0.1.5"
