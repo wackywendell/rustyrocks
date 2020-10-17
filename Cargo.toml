@@ -1,10 +1,10 @@
 [package]
-name = "rustyrocks"
-version = "0.1.0"
 authors = ["Wendell Smith <wackywendell@gmail.com>"]
 edition = "2018"
+name = "rustyrocks"
+version = "0.1.0"
 
 [dependencies]
+itertools = "0.9.0"
+rmp = "0.8.9"
 rocksdb = "0.15.0"
-rmp = "0.8.7"
-itertools = "0.8.0"

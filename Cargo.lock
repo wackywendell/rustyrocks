@@ -168,9 +168,9 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.8.0"
+version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b8467d9c1cebe26feb08c640139247fac215782d35371ade9a2136ed6085358"
+checksum = "284f18f85651fe11e8a991b2adb42cb078325c996ed026d994719efcfca1d54b"
 dependencies = [
  "either",
 ]
@@ -319,9 +319,9 @@ checksum = "11a7e20d1cce64ef2fed88b66d347f88bd9babb82845b2b858f3edbf59a4f716"
 
 [[package]]
 name = "rmp"
-version = "0.8.8"
+version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0f594cb7ff8f1c5a7907f6be91f15795c8301e0d5718eb007fb5832723dd716e"
+checksum = "0f10b46df14cf1ee1ac7baa4d2fbc2c52c0622a4b82fa8740e37bc452ac0184f"
 dependencies = [
  "byteorder",
  "num-traits",
