@@ -15,12 +15,12 @@ fn concat_merge(
     let mut result: Vec<u8> = Vec::with_capacity(operands.size_hint().0);
 
     let mut existing: Vec<&str> = vec![];
-    existing_val.map(|mut unparsed| {
+    if let Some(mut unparsed) = existing_val {
         while let Ok((chunk, tail)) = read_str_from_slice(unparsed) {
             existing.push(chunk);
             unparsed = tail;
         }
-    });
+    }
 
     let mut merged_inputs: Vec<&str> = vec![];
     for mut unparsed in operands {
@@ -30,7 +30,7 @@ fn concat_merge(
         }
     }
 
-    merged_inputs.sort();
+    merged_inputs.sort_unstable();
     for s in kmerge(vec![existing, merged_inputs]).dedup() {
         match write_str(&mut result, s) {
             Ok(()) => {}
@@ -46,7 +46,7 @@ fn serialize_single(s: &str) -> Vec<u8> {
     if let Err(e) = write_str(&mut r, s) {
         println!("Ignoring merge err: {}", e);
     }
-    return r;
+    r
 }
 
 fn deserialize(s: &[u8]) -> Vec<&str> {
@@ -56,7 +56,7 @@ fn deserialize(s: &[u8]) -> Vec<&str> {
         result.push(chunk);
         unparsed = tail;
     }
-    return result;
+    result
 }
 
 fn main() {
@@ -71,7 +71,7 @@ fn main() {
     let stdin = io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
-        let splits: Vec<_> = line.trim().splitn(2, " ").collect();
+        let splits: Vec<_> = line.trim().splitn(2, ' ').collect();
         if splits.len() < 2 {
             println!("Could not split '{}'", line);
             continue;
@@ -111,6 +111,6 @@ fn main() {
         for r in results {
             print!(" {}", r);
         }
-        print!("\n");
+        println!();
     }
 }
