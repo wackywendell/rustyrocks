@@ -5,6 +5,6 @@ authors = ["Wendell Smith <wackywendell@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-rocksdb = "0.12.2"
+rocksdb = "0.15.0"
 rmp = "0.8.7"
 itertools = "0.8.0"
