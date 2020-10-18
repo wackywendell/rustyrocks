@@ -2,12 +2,12 @@ use std::marker::{PhantomData, Send};
 
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
 
-pub trait StaticDeserialize: Sized {
+pub trait Deserializable: Sized {
     type Error: std::error::Error + Send + Sync + 'static;
     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error>;
 }
 
-impl StaticDeserialize for String {
+impl Deserializable for String {
     type Error = std::str::Utf8Error;
     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
         std::str::from_utf8(bytes).map(|s| s.to_owned())
@@ -90,8 +90,8 @@ where
 impl<KRef, V, VRef> GetDB<KRef, V> for KeyValueDB<KRef, V, VRef>
 where
     KRef: Serializable,
-    V: StaticDeserialize,
-    <V as StaticDeserialize>::Error: Send + Sync + 'static,
+    V: Deserializable,
+    <V as Deserializable>::Error: Send + Sync + 'static,
 {
     fn get(&self, k: KRef) -> Result<Option<V>, failure::Error> {
         let kb = k.serialize();
@@ -107,13 +107,13 @@ where
     }
 }
 
-pub struct DBIter<'a, K: StaticDeserialize, V: StaticDeserialize> {
+pub struct DBIter<'a, K: Deserializable, V: Deserializable> {
     phantom_key: PhantomData<K>,
     phantom_value: PhantomData<V>,
     inner: rocksdb::DBIterator<'a>,
 }
 
-impl<'a, K: StaticDeserialize, V: StaticDeserialize> Iterator for DBIter<'a, K, V> {
+impl<'a, K: Deserializable, V: Deserializable> Iterator for DBIter<'a, K, V> {
     type Item = Result<(K, V), failure::Error>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -137,12 +137,12 @@ impl<'a, K: StaticDeserialize, V: StaticDeserialize> Iterator for DBIter<'a, K, 
 
 impl<'a, KRef, V, VRef> KeyValueDB<KRef, V, VRef>
 where
-    V: StaticDeserialize,
+    V: Deserializable,
 {
     // type Item=Result<(K, V), failure::Error>;
     // type IntoIter=DBIter<'a, K, V>;
 
-    fn db_iter<K: StaticDeserialize>(&'a self) -> DBIter<'a, K, V> {
+    fn db_iter<K: Deserializable>(&'a self) -> DBIter<'a, K, V> {
         DBIter {
             phantom_key: PhantomData,
             phantom_value: PhantomData,
@@ -151,7 +151,7 @@ where
     }
 }
 
-pub trait AssociateMergeable: Sized + StaticDeserialize {
+pub trait AssociateMergeable: Sized + Deserializable {
     fn merge(&mut self, other: &mut Self);
     fn handle_deser_error(key: &[u8], buf: &[u8], err: Self::Error) -> Option<Self>;
     fn into_bytes(self) -> Vec<u8>;
@@ -193,7 +193,7 @@ pub struct MergeableDB<K, V, VRef> {
     typed_db: KeyValueDB<K, V, VRef>,
 }
 
-// impl<K: Serializable + ?Sized, V: Serializable + StaticDeserialize + ?Sized> TypedDB<K, V>
+// impl<K: Serializable + ?Sized, V: Serializable + Deserializable + ?Sized> TypedDB<K, V>
 impl<K, V, VRef> PutDB<K, VRef> for MergeableDB<K, V, VRef>
 where
     K: Serializable,
@@ -207,8 +207,8 @@ where
 impl<K, V, VRef> GetDB<K, V> for MergeableDB<K, V, VRef>
 where
     K: Serializable,
-    V: StaticDeserialize,
-    <V as StaticDeserialize>::Error: Send + Sync + 'static,
+    V: Deserializable,
+    <V as Deserializable>::Error: Send + Sync + 'static,
 {
     fn get(&self, k: K) -> Result<Option<V>, failure::Error> {
         self.typed_db.get(k)
@@ -241,7 +241,7 @@ where
         Ok(())
     }
 
-    pub fn db_iter<K: StaticDeserialize>(&self) -> DBIter<K, V> {
+    pub fn db_iter<K: Deserializable>(&self) -> DBIter<K, V> {
         self.typed_db.db_iter()
     }
 }

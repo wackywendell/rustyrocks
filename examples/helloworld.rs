@@ -1,14 +1,14 @@
 use std::collections::BTreeSet;
 use std::io::prelude::*;
 
-use rustyrocks::{AssociateMergeable, DBIter, MergeableDB, Serializable, StaticDeserialize};
+use rustyrocks::{AssociateMergeable, DBIter, Deserializable, MergeableDB, Serializable};
 
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 struct BSet<T: std::cmp::Ord>(BTreeSet<T>);
 
-impl StaticDeserialize for BSet<String> {
+impl Deserializable for BSet<String> {
     type Error = bincode::Error;
     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
         bincode::deserialize(bytes)
