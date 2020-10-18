@@ -1,11 +1,11 @@
 [package]
-name = "rustyrocks"
-version = "0.1.0"
 authors = ["Wendell Smith <wackywendell@gmail.com>"]
 edition = "2018"
+name = "rustyrocks"
+version = "0.1.0"
 
 [dependencies]
-rocksdb = "0.13.0"
+bincode = "1.3.1" 
+failure = "0.1.5" 
+rocksdb = "0.15.0" 
 serde = "1.0.92" # Probably not needed anymore?
-bincode = "1.1.4"
-failure = "0.1.5"
