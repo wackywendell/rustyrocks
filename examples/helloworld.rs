@@ -6,14 +6,7 @@ use rustyrocks::{AssociateMergeable, MergeableDB, StaticDeserialize, StaticSeria
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
-struct BSet<T>(BTreeSet<T>);
-
-// impl StaticDeserialize for String {
-//     type Error = bincode::Error;
-//     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
-//         return bincode::deserialize(bytes);
-//     }
-// }
+struct BSet<T: std::cmp::Ord>(BTreeSet<T>);
 
 impl StaticDeserialize for BSet<String> {
     type Error = bincode::Error;
@@ -22,15 +15,19 @@ impl StaticDeserialize for BSet<String> {
     }
 }
 
+// TODO
+// - StaticSerialize should have an error type
+// - StaticSerialize should return an AsRef<[u8]>+ToOwned<[u8]>
+
 impl StaticSerialize for BSet<String> {
     fn serialize(&self) -> &[u8] {
-        bincode::serialize(bytes)
+        bincode::serialize(&self).unwrap().as_ref()
     }
 }
 
 impl AssociateMergeable for BSet<String> {
     fn merge(&mut self, other: &mut Self) {
-        self.0.append(other.0)
+        self.0.append(&mut other.0)
     }
 }
 
@@ -38,7 +35,7 @@ fn main() -> Result<(), failure::Error> {
     let path = "words.db";
 
     // NB: db is automatically closed at end of lifetime
-    let db: MergeableDB<String, BTreeSet<String>> = MergeableDB::new(path)?;
+    let db: MergeableDB<String, BSet<String>> = MergeableDB::new(path)?;
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
@@ -50,8 +47,8 @@ fn main() -> Result<(), failure::Error> {
         }
         let word = splits[0];
         let value = splits[1];
-        let mut new_set = BTreeSet::new();
-        new_set.insert(value.to_string());
+        let mut new_set = BSet(BTreeSet::new());
+        new_set.0.insert(value.to_string());
         // db.put(word, value).unwrap();
         if let Err(e) = db.merge(&word.to_string(), &new_set) {
             println!("Ignoring merge err: {}", e);
@@ -77,11 +74,11 @@ fn main() -> Result<(), failure::Error> {
         // }
     }
 
-    let iter = db.typed_db.into_iter(); // Always iterates forward
+    let iter = db.db_iter(); // Always iterates forward
     for kv in iter {
         let (k, v) = kv?;
         print!("{}:", k);
-        for r in v {
+        for r in v.0 {
             print!(" {}", r);
         }
         print!("\n");

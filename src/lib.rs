@@ -1,18 +1,34 @@
-use std::collections::BTreeSet;
-use std::io::prelude::*;
 use std::marker::{PhantomData, Send};
 
 use rocksdb::{IteratorMode, MergeOperands, Options, DB};
-use serde::{Deserialize, Serialize};
 
 pub trait StaticDeserialize: Sized {
     type Error: std::error::Error + Send + Sync + 'static;
     fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error>;
 }
 
-pub trait StaticSerialize: Sized {
+impl StaticDeserialize for String {
+    type Error = std::str::Utf8Error;
+    fn deserialize(bytes: &[u8]) -> Result<Self, Self::Error> {
+        std::str::from_utf8(bytes).map(|s| s.to_owned())
+    }
+}
+
+pub trait StaticSerialize {
     // TODO: Should we allow for errors in serializing?
     fn serialize(&self) -> &[u8];
+}
+
+impl StaticSerialize for str {
+    fn serialize(&self) -> &[u8] {
+        self.as_ref()
+    }
+}
+
+impl StaticSerialize for String {
+    fn serialize(&self) -> &[u8] {
+        self.as_ref()
+    }
 }
 
 trait TypedDB<K: ?Sized, V> {
@@ -34,7 +50,7 @@ impl<K: StaticSerialize + ?Sized, V: StaticSerialize + StaticDeserialize + ?Size
         KeyValueDB {
             phantom_key: PhantomData,
             phantom_value: PhantomData,
-            db: db,
+            db,
         }
     }
 }
@@ -66,7 +82,7 @@ where
     }
 }
 
-struct DBIter<'a, K, V> {
+pub struct DBIter<'a, K: ?Sized, V> {
     phantom_key: PhantomData<K>,
     phantom_value: PhantomData<V>,
     inner: rocksdb::DBIterator<'a>,
@@ -94,16 +110,16 @@ impl<'a, K: StaticDeserialize, V: StaticDeserialize> Iterator for DBIter<'a, K, 
     }
 }
 
-impl<'a, K: Deserialize<'a>, V: Deserialize<'a>> KeyValueDB<K, V> {
+impl<'a, K: ?Sized, V> KeyValueDB<K, V> {
     // type Item=Result<(K, V), failure::Error>;
     // type IntoIter=DBIter<'a, K, V>;
 
-    fn into_iter(&'a self) -> DBIter<'a, K, V> {
-        return DBIter {
+    fn db_iter(&'a self) -> DBIter<'a, K, V> {
+        DBIter {
             phantom_key: PhantomData,
             phantom_value: PhantomData,
             inner: self.db.iterator(IteratorMode::Start),
-        };
+        }
     }
 }
 
@@ -150,22 +166,16 @@ pub struct MergeableDB<K: ?Sized, V: ?Sized> {
     typed_db: KeyValueDB<K, V>,
 }
 
-impl<K, V> MergeableDB<K, V>
+impl<K: StaticSerialize + ?Sized, V: StaticSerialize + StaticDeserialize + ?Sized> TypedDB<K, V>
+    for MergeableDB<K, V>
 where
-    K: StaticSerialize + ?Sized,
-    V: StaticSerialize + StaticDeserialize,
+    <V as StaticDeserialize>::Error: Send + Sync + 'static,
 {
-    pub fn get(&self, k: &K) -> Result<Option<V>, failure::Error> {
+    fn get(&self, k: &K) -> Result<Option<V>, failure::Error> {
         self.typed_db.get(k)
     }
-}
 
-impl<K, V> MergeableDB<K, V>
-where
-    K: StaticSerialize + ?Sized,
-    V: StaticSerialize + StaticDeserialize,
-{
-    pub fn put(&self, k: &K, v: V) -> Result<(), failure::Error> {
+    fn put(&self, k: &K, v: V) -> Result<(), failure::Error> {
         self.typed_db.put(k, v)
     }
 }
@@ -193,5 +203,9 @@ where
 
         self.typed_db.db.merge(kb, vb)?;
         Ok(())
+    }
+
+    pub fn db_iter(&'a self) -> DBIter<'a, K, V> {
+        self.typed_db.db_iter()
     }
 }
