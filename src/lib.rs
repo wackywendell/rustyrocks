@@ -13,11 +13,6 @@ impl StaticDeserialize for String {
         std::str::from_utf8(bytes).map(|s| s.to_owned())
     }
 }
-
-// TODO should we have two traits, where either can be implemented?
-// One which is just AsRef<[u8]>; the other which is fn serialize(&self) -> Bytes
-// Not sure if that is possible without GATs
-
 pub trait Serializable {
     // TODO: Should we allow for errors in serializing?
     type Bytes: AsRef<[u8]>;
@@ -31,43 +26,43 @@ impl<'a> Serializable for &'a str {
     }
 }
 
-trait TypedDB<K, V, VRef> {
+trait TypedDB<KRef, V, VRef> {
     // TODO use a real error instead of failure
-    fn get(&self, k: K) -> Result<Option<V>, failure::Error>;
+    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error>;
     // TODO: Should we return the value on error?
-    fn put(&self, k: K, v: VRef) -> Result<(), failure::Error>;
+    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error>;
 }
 
-trait putDB<K, V> {
-    fn put(&self, k: K, v: V) -> Result<(), failure::Error>;
+trait PutDB<KRef, VRef> {
+    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error>;
 }
 
-trait getDB<K, V> {
-    fn get(&self, k: K) -> Result<Option<V>, failure::Error>;
+trait GetDB<KRef, V> {
+    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error>;
 }
 
-impl<DB, K, V, VRef> TypedDB<K, V, VRef> for DB
+impl<DB, KRef, V, VRef> TypedDB<KRef, V, VRef> for DB
 where
-    DB: putDB<K, VRef> + getDB<K, V>,
+    DB: PutDB<KRef, VRef> + GetDB<KRef, V>,
     VRef: AsRef<[u8]>,
 {
-    fn put(&self, k: K, v: VRef) -> Result<(), failure::Error> {
-        putDB::put(self, k, v)
+    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error> {
+        PutDB::put(self, k, v)
     }
 
-    fn get(&self, k: K) -> Result<Option<V>, failure::Error> {
-        getDB::get(self, k)
+    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error> {
+        GetDB::get(self, k)
     }
 }
 
-pub struct KeyValueDB<K, V, VRef> {
-    phantom_key: PhantomData<K>,
+pub struct KeyValueDB<KRef, V, VRef> {
+    phantom_key: PhantomData<KRef>,
     phantom_value: PhantomData<V>,
     phantom_ref: PhantomData<VRef>,
     db: DB,
 }
 
-impl<K, V, VRef> KeyValueDB<K, V, VRef> {
+impl<KRef, V, VRef> KeyValueDB<KRef, V, VRef> {
     pub fn new(db: DB) -> Self {
         KeyValueDB {
             phantom_key: PhantomData,
@@ -78,12 +73,12 @@ impl<K, V, VRef> KeyValueDB<K, V, VRef> {
     }
 }
 
-impl<K, V, VRef> putDB<K, VRef> for KeyValueDB<K, V, VRef>
+impl<KRef, V, VRef> PutDB<KRef, VRef> for KeyValueDB<KRef, V, VRef>
 where
-    K: Serializable,
+    KRef: Serializable,
     VRef: Serializable,
 {
-    fn put(&self, k: K, v: VRef) -> Result<(), failure::Error> {
+    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error> {
         let kb = k.serialize();
         let vb = v.serialize();
 
@@ -92,13 +87,13 @@ where
     }
 }
 
-impl<K, V, VRef> getDB<K, V> for KeyValueDB<K, V, VRef>
+impl<KRef, V, VRef> GetDB<KRef, V> for KeyValueDB<KRef, V, VRef>
 where
-    K: Serializable,
+    KRef: Serializable,
     V: StaticDeserialize,
     <V as StaticDeserialize>::Error: Send + Sync + 'static,
 {
-    fn get(&self, k: K) -> Result<Option<V>, failure::Error> {
+    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error> {
         let kb = k.serialize();
         let vb_opt: Option<rocksdb::DBPinnableSlice> = self.db.get_pinned(kb)?;
         let vb: rocksdb::DBPinnableSlice = match vb_opt {
@@ -112,7 +107,7 @@ where
     }
 }
 
-pub struct DBIter<'a, K: ?Sized, V> {
+pub struct DBIter<'a, K: StaticDeserialize, V: StaticDeserialize> {
     phantom_key: PhantomData<K>,
     phantom_value: PhantomData<V>,
     inner: rocksdb::DBIterator<'a>,
@@ -140,11 +135,14 @@ impl<'a, K: StaticDeserialize, V: StaticDeserialize> Iterator for DBIter<'a, K, 
     }
 }
 
-impl<'a, K, V, VRef> KeyValueDB<K, V, VRef> {
+impl<'a, KRef, V, VRef> KeyValueDB<KRef, V, VRef>
+where
+    V: StaticDeserialize,
+{
     // type Item=Result<(K, V), failure::Error>;
     // type IntoIter=DBIter<'a, K, V>;
 
-    fn db_iter(&'a self) -> DBIter<'a, K, V> {
+    fn db_iter<K: StaticDeserialize>(&'a self) -> DBIter<'a, K, V> {
         DBIter {
             phantom_key: PhantomData,
             phantom_value: PhantomData,
@@ -196,7 +194,7 @@ pub struct MergeableDB<K, V, VRef> {
 }
 
 // impl<K: Serializable + ?Sized, V: Serializable + StaticDeserialize + ?Sized> TypedDB<K, V>
-impl<K, V, VRef> putDB<K, VRef> for MergeableDB<K, V, VRef>
+impl<K, V, VRef> PutDB<K, VRef> for MergeableDB<K, V, VRef>
 where
     K: Serializable,
     VRef: Serializable,
@@ -206,7 +204,7 @@ where
     }
 }
 
-impl<K, V, VRef> getDB<K, V> for MergeableDB<K, V, VRef>
+impl<K, V, VRef> GetDB<K, V> for MergeableDB<K, V, VRef>
 where
     K: Serializable,
     V: StaticDeserialize,
@@ -217,9 +215,9 @@ where
     }
 }
 
-impl<K, V, VRef> MergeableDB<K, V, VRef>
+impl<KRef, V, VRef> MergeableDB<KRef, V, VRef>
 where
-    K: Serializable,
+    KRef: Serializable,
     V: AssociateMergeable,
     VRef: Serializable,
 {
@@ -235,7 +233,7 @@ where
         })
     }
 
-    pub fn merge(&self, k: K, v: VRef) -> Result<(), failure::Error> {
+    pub fn merge(&self, k: KRef, v: VRef) -> Result<(), failure::Error> {
         let kb = k.serialize();
         let vb = v.serialize();
 
@@ -243,7 +241,7 @@ where
         Ok(())
     }
 
-    pub fn db_iter<'a>(&'a self) -> DBIter<'a, K, V> {
+    pub fn db_iter<K: StaticDeserialize>(&self) -> DBIter<K, V> {
         self.typed_db.db_iter()
     }
 }

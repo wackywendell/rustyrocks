@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::prelude::*;
 
-use rustyrocks::{AssociateMergeable, MergeableDB, Serializable, StaticDeserialize};
+use rustyrocks::{AssociateMergeable, DBIter, MergeableDB, Serializable, StaticDeserialize};
 
 use serde::{Deserialize, Serialize};
 
@@ -83,7 +83,7 @@ fn main() -> Result<(), failure::Error> {
         // }
     }
 
-    let iter = db.db_iter(); // Always iterates forward
+    let iter: DBIter<String, _> = db.db_iter(); // Always iterates forward
     for kv in iter {
         let (k, v) = kv?;
         print!("{}:", k);
