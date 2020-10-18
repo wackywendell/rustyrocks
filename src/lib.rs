@@ -33,28 +33,6 @@ trait TypedDB<KRef, V, VRef> {
     fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error>;
 }
 
-trait PutDB<KRef, VRef> {
-    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error>;
-}
-
-trait GetDB<KRef, V> {
-    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error>;
-}
-
-impl<DB, KRef, V, VRef> TypedDB<KRef, V, VRef> for DB
-where
-    DB: PutDB<KRef, VRef> + GetDB<KRef, V>,
-    VRef: AsRef<[u8]>,
-{
-    fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error> {
-        PutDB::put(self, k, v)
-    }
-
-    fn get(&self, k: KRef) -> Result<Option<V>, failure::Error> {
-        GetDB::get(self, k)
-    }
-}
-
 pub struct KeyValueDB<KRef, V, VRef> {
     phantom_key: PhantomData<KRef>,
     phantom_value: PhantomData<V>,
@@ -73,10 +51,12 @@ impl<KRef, V, VRef> KeyValueDB<KRef, V, VRef> {
     }
 }
 
-impl<KRef, V, VRef> PutDB<KRef, VRef> for KeyValueDB<KRef, V, VRef>
+impl<KRef, V, VRef> TypedDB<KRef, V, VRef> for KeyValueDB<KRef, V, VRef>
 where
     KRef: Serializable,
+    V: Deserializable,
     VRef: Serializable,
+    <V as Deserializable>::Error: Send + Sync + 'static,
 {
     fn put(&self, k: KRef, v: VRef) -> Result<(), failure::Error> {
         let kb = k.serialize();
@@ -85,14 +65,7 @@ where
         self.db.put(kb, vb)?;
         Ok(())
     }
-}
 
-impl<KRef, V, VRef> GetDB<KRef, V> for KeyValueDB<KRef, V, VRef>
-where
-    KRef: Serializable,
-    V: Deserializable,
-    <V as Deserializable>::Error: Send + Sync + 'static,
-{
     fn get(&self, k: KRef) -> Result<Option<V>, failure::Error> {
         let kb = k.serialize();
         let vb_opt: Option<rocksdb::DBPinnableSlice> = self.db.get_pinned(kb)?;
@@ -194,22 +167,17 @@ pub struct MergeableDB<K, V, VRef> {
 }
 
 // impl<K: Serializable + ?Sized, V: Serializable + Deserializable + ?Sized> TypedDB<K, V>
-impl<K, V, VRef> PutDB<K, VRef> for MergeableDB<K, V, VRef>
+impl<K, V, VRef> TypedDB<K, V, VRef> for MergeableDB<K, V, VRef>
 where
     K: Serializable,
     VRef: Serializable,
+    V: Deserializable,
+    <V as Deserializable>::Error: Send + Sync + 'static,
 {
     fn put(&self, k: K, v: VRef) -> Result<(), failure::Error> {
         self.typed_db.put(k, v)
     }
-}
 
-impl<K, V, VRef> GetDB<K, V> for MergeableDB<K, V, VRef>
-where
-    K: Serializable,
-    V: Deserializable,
-    <V as Deserializable>::Error: Send + Sync + 'static,
-{
     fn get(&self, k: K) -> Result<Option<V>, failure::Error> {
         self.typed_db.get(k)
     }
