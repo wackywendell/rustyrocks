@@ -20,8 +20,10 @@ impl StaticDeserialize for BSet<String> {
 // - StaticSerialize should return an AsRef<[u8]>+ToOwned<[u8]>
 
 impl StaticSerialize for BSet<String> {
-    fn serialize(&self) -> &[u8] {
-        bincode::serialize(&self).unwrap().as_ref()
+    type Bytes = Vec<u8>;
+
+    fn serialize(&self) -> Self::Bytes {
+        bincode::serialize(&self).unwrap()
     }
 }
 
@@ -40,7 +42,7 @@ fn main() -> Result<(), failure::Error> {
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
         let line = line.unwrap();
-        let splits: Vec<_> = line.trim().splitn(2, " ").collect();
+        let splits: Vec<_> = line.trim().splitn(2, ' ').collect();
         if splits.len() != 2 {
             println!("Could not split '{}'", line);
             continue;
@@ -81,7 +83,7 @@ fn main() -> Result<(), failure::Error> {
         for r in v.0 {
             print!(" {}", r);
         }
-        print!("\n");
+        println!();
     }
 
     Ok(())

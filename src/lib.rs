@@ -14,20 +14,46 @@ impl StaticDeserialize for String {
     }
 }
 
-pub trait StaticSerialize {
-    // TODO: Should we allow for errors in serializing?
-    fn serialize(&self) -> &[u8];
+// I want to be able to do:
+// let byteref: &[u8] = StaticSerialize::as_serialized(&v).as_ref()
+// let bytes: Vec<u8> = StaticSerialize::serialize(v).into()
+
+pub trait AsBytes {
+    fn as_bytes(&self) -> &[u8];
 }
 
-impl StaticSerialize for str {
-    fn serialize(&self) -> &[u8] {
-        self.as_ref()
+pub trait IntoBytes {
+    fn into_bytes(self) -> Vec<u8>;
+}
+
+impl AsBytes for str {
+    fn as_bytes(&self) -> &[u8] {
+        self.as_bytes()
     }
 }
 
+pub trait StaticSerialize {
+    // This trait exists so that we can do two things:
+    // 1. take a reference to a key or value, and produce a
+
+    // To make this more generic, we would really want:
+    // `type RefBytes<'a>: AsRef<[u8]>;`
+    // And then have
+    // `fn serialize(&'a self) -> Self::RefBytes<'a>`;
+    // But that requires Generic Associated Types, which we don't have yet:
+    // https://github.com/rust-lang/rust/issues/44265
+
+    // type Bytes: Into<Vec<u8>>;
+
+    // TODO: Should we allow for errors in serializing?
+    type Bytes: AsRef<[u8]>;
+    fn serialize(&self) -> Self::Bytes;
+}
+
 impl StaticSerialize for String {
-    fn serialize(&self) -> &[u8] {
-        self.as_ref()
+    type Bytes = String;
+    fn serialize(&self) -> Self::Bytes {
+        self.clone()
     }
 }
 
@@ -159,7 +185,8 @@ fn merge<V: AssociateMergeable>(
         };
     }
 
-    merged.map(|value| value.serialize().to_owned())
+    // TODO this .as_ref().to_owned() does a copy, which for strings is unnecessary
+    merged.map(|value| value.serialize().as_ref().to_owned())
 }
 
 pub struct MergeableDB<K: ?Sized, V: ?Sized> {
