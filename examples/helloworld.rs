@@ -15,10 +15,6 @@ impl StaticDeserialize for BSet<String> {
     }
 }
 
-// TODO
-// - StaticSerialize should have an error type
-// - StaticSerialize should return an AsRef<[u8]>+ToOwned<[u8]>
-
 impl StaticSerialize for BSet<String> {
     type Bytes = Vec<u8>;
 
@@ -37,6 +33,10 @@ impl AssociateMergeable for BSet<String> {
             "Error deserializing. key: {:?}; error: {}; bytes: {:?}",
             key, err, buf
         )
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        bincode::serialize(&self).unwrap()
     }
 }
 

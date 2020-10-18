@@ -32,10 +32,11 @@ impl AsBytes for str {
     }
 }
 
-pub trait StaticSerialize {
-    // This trait exists so that we can do two things:
-    // 1. take a reference to a key or value, and produce a
+// TODO should we have two traits, where either can be implemented?
+// One which is just AsRef<[u8]>; the other which is fn serialize(&self) -> Bytes
+// Not sure if that is possible without GATs
 
+pub trait StaticSerialize {
     // To make this more generic, we would really want:
     // `type RefBytes<'a>: AsRef<[u8]>;`
     // And then have
@@ -53,6 +54,7 @@ pub trait StaticSerialize {
 impl StaticSerialize for String {
     type Bytes = String;
     fn serialize(&self) -> Self::Bytes {
+        // TODO this clone should really be unnecessary
         self.clone()
     }
 }
@@ -152,6 +154,7 @@ impl<'a, K: ?Sized, V> KeyValueDB<K, V> {
 pub trait AssociateMergeable: Sized + StaticSerialize + StaticDeserialize {
     fn merge(&mut self, other: &mut Self);
     fn handle_deser_error(key: &[u8], buf: &[u8], err: Self::Error) -> Option<Self>;
+    fn into_bytes(self) -> Vec<u8>;
 }
 
 fn merge<V: AssociateMergeable>(
@@ -183,7 +186,7 @@ fn merge<V: AssociateMergeable>(
     }
 
     // TODO this .as_ref().to_owned() does a copy, which for strings is unnecessary
-    merged.map(|value| value.serialize().as_ref().to_owned())
+    merged.map(|value| value.into_bytes())
 }
 
 pub struct MergeableDB<K: ?Sized, V: ?Sized> {
