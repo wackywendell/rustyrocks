@@ -60,6 +60,7 @@ impl StaticSerialize for String {
 }
 
 trait TypedDB<K: ?Sized, V> {
+    // TODO use a real error instead of failure
     fn get(&self, k: &K) -> Result<Option<V>, failure::Error>;
     // TODO: Should we return the value on error?
     fn put(&self, k: &K, v: V) -> Result<(), failure::Error>;
