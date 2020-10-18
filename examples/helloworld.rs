@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 use std::io::prelude::*;
 
-use rustyrocks::{AssociateMergeable, MergeableDB, StaticDeserialize, StaticSerialize};
+use rustyrocks::{AssociateMergeable, MergeableDB, Serializable, StaticDeserialize};
 
 use serde::{Deserialize, Serialize};
 
@@ -15,10 +15,10 @@ impl StaticDeserialize for BSet<String> {
     }
 }
 
-impl StaticSerialize for BSet<String> {
+impl Serializable for &BSet<String> {
     type Bytes = Vec<u8>;
 
-    fn serialize(&self) -> Self::Bytes {
+    fn serialize(self) -> Self::Bytes {
         bincode::serialize(&self).unwrap()
     }
 }
@@ -44,7 +44,7 @@ fn main() -> Result<(), failure::Error> {
     let path = "words.db";
 
     // NB: db is automatically closed at end of lifetime
-    let db: MergeableDB<String, BSet<String>> = MergeableDB::new(path)?;
+    let db: MergeableDB<&str, BSet<String>, &BSet<String>> = MergeableDB::new(path)?;
 
     let stdin = std::io::stdin();
     for line in stdin.lock().lines() {
