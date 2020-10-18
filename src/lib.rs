@@ -151,32 +151,29 @@ impl<'a, K: ?Sized, V> KeyValueDB<K, V> {
 
 pub trait AssociateMergeable: Sized + StaticSerialize + StaticDeserialize {
     fn merge(&mut self, other: &mut Self);
-}
-
-fn unwrap_or_log<V, E: std::fmt::Display>(r: Result<V, E>) -> Option<V> {
-    match r {
-        Ok(v) => Some(v),
-        Err(e) => {
-            println!("Error! {}", e);
-            None
-        }
-    }
+    fn handle_deser_error(key: &[u8], buf: &[u8], err: Self::Error) -> Option<Self>;
 }
 
 fn merge<V: AssociateMergeable>(
-    _new_key: &[u8],
+    key: &[u8],
     existing_val: Option<&[u8]>,
     operands: &mut MergeOperands,
 ) -> Option<Vec<u8>> {
-    let mut merged: Option<V> = existing_val
-        .map(|unparsed| V::deserialize(unparsed).expect("Could not deserialize existing value"));
+    // TODO add an extra option to AssociateMergeable for handling failed merges, so that
+    // one has the option of e.g. panicking, logging, or... ?
+    let mut merged: Option<V> = existing_val.and_then(|unparsed| match V::deserialize(unparsed) {
+        Ok(v) => Some(v),
+        Err(err) => V::handle_deser_error(key, unparsed, err),
+    });
 
     for unparsed in operands {
-        let deser: Option<V> = unwrap_or_log(V::deserialize(unparsed));
+        let deser: Option<V> = match V::deserialize(unparsed) {
+            Ok(v) => Some(v),
+            Err(err) => V::handle_deser_error(key, unparsed, err),
+        };
 
         merged = match (merged, deser) {
-            (None, None) => None,
-            (Some(m), None) => Some(m),
+            (m, None) => m,
             (None, Some(d)) => Some(d),
             (Some(mut m), Some(mut d)) => {
                 m.merge(&mut d);

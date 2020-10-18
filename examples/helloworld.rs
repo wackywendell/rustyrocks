@@ -31,6 +31,13 @@ impl AssociateMergeable for BSet<String> {
     fn merge(&mut self, other: &mut Self) {
         self.0.append(&mut other.0)
     }
+
+    fn handle_deser_error(key: &[u8], buf: &[u8], err: Self::Error) -> Option<Self> {
+        panic!(
+            "Error deserializing. key: {:?}; error: {}; bytes: {:?}",
+            key, err, buf
+        )
+    }
 }
 
 fn main() -> Result<(), failure::Error> {
