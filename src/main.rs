@@ -10,8 +10,9 @@ use rocksdb::{IteratorMode, MergeOperands, Options, DB};
 fn concat_merge(
     _new_key: &[u8],
     existing_val: Option<&[u8]>,
-    operands: &mut MergeOperands,
+    operands: &MergeOperands,
 ) -> Option<Vec<u8>> {
+    let operands = operands.into_iter();
     let mut result: Vec<u8> = Vec::with_capacity(operands.size_hint().0);
 
     let mut existing: Vec<&str> = vec![];
@@ -64,7 +65,7 @@ fn main() {
 
     let mut opts = Options::default();
     opts.create_if_missing(true);
-    opts.set_merge_operator("test operator", concat_merge, None);
+    opts.set_merge_operator_associative("test operator", concat_merge);
     let db = DB::open(&opts, path).unwrap();
 
     // NB: db is automatically closed at end of lifetime
@@ -104,7 +105,8 @@ fn main() {
     }
 
     let iter = db.iterator(IteratorMode::Start); // Always iterates forward
-    for (key, value) in iter {
+    for kv in iter {
+        let (key, value) = kv.unwrap();
         let k = std::str::from_utf8(key.as_ref()).unwrap();
         print!("{}:", k);
         let results = deserialize(value.as_ref());
